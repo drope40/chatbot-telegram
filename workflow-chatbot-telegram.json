@@ -1,0 +1,299 @@
+{
+  "name": "Bot do Clima - Telegram + OpenWeather",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "a3482d1d-3694-4d81-880e-3a2cae8b037f",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "ccb03442-1bf7-4ed1-bdd8-71b64f14b009"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9af7955a-e24b-4481-b041-b4709720a3cf",
+              "name": "queue",
+              "value": "={{ $json.message.text }}",
+              "type": "string"
+            },
+            {
+              "id": "18e74964-9220-4800-a953-e331f7e8a8eb",
+              "name": "chatId",
+              "value": "={{ $json.message.chat.id }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "11006247-5b15-471d-b0c1-e2486ae0e47c",
+      "name": "Capturar Mensagem (queue)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliza a cidade enviada no Telegram para o formato aceito pela OpenWeather.\n// Ex.: \"  São   Paulo , SP , BR \" -> \"sao paulo,sp,br\"\nreturn $input.all().map((item) => {\n  const original = String(item.json.queue ?? '');\n\n  let queue = original\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')   // remove acentos\n    .toLowerCase()                      // letras minúsculas\n    .replace(/[^a-z0-9,'\\- ]/g, ' ')    // remove símbolos estranhos (. ! ? etc.)\n    .replace(/\\s*,\\s*/g, ',')           // remove espaços ao redor das vírgulas\n    .replace(/\\s+/g, ' ')               // colapsa espaços repetidos\n    .replace(/^,+|,+$/g, '')            // remove vírgulas nas pontas\n    .trim();\n\n  // Comandos do Telegram (/start, /help) não são cidades\n  if (original.trim().startsWith('/')) queue = '';\n\n  // Garante o país BR no final (Cidade -> cidade,br | Cidade,UF -> cidade,uf,br)\n  const parts = queue.split(',').map((p) => p.trim()).filter(Boolean);\n  if (parts.length > 0 && parts[parts.length - 1] !== 'br') parts.push('br');\n  queue = parts.join(',');\n\n  return {\n    json: {\n      queue,\n      original,\n      chatId: item.json.chatId,\n    },\n  };\n});"
+      },
+      "id": "f72c5071-67b8-4dbd-832e-02883e44a83f",
+      "name": "Normalizar Cidade",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openweathermap.org/data/2.5/weather",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.queue }}"
+            },
+            {
+              "name": "queue",
+              "value": "={{ $json.queue }}"
+            },
+            {
+              "name": "units",
+              "value": "metric"
+            },
+            {
+              "name": "lang",
+              "value": "pt_br"
+            },
+            {
+              "name": "appid",
+              "value": "={{ $env.OPENWEATHER_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "026216c8-24c0-4a38-822b-726555d3b0fc",
+      "name": "OpenWeather - Clima Atual",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "78ff3d69-21a2-4d3c-bfe0-a9f685e449c7",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "058367cf-d9f7-44c2-a850-ee8afb9de9bf",
+              "leftValue": "={{ !!($json.body && $json.body.main && typeof $json.body.main.temp === 'number' && $json.body.name) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "df7680b9-9738-42cf-9a0e-9cb5e7dcd127",
+      "name": "Resposta Válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extrai a temperatura do JSON da OpenWeather e monta a mensagem final.\nconst body = $json.body || {};\nconst temperatura = Math.round(Number(body.main.temp));\nconst cidade = body.name;\n\nreturn {\n  json: {\n    cidade,\n    temperatura,\n    message: `🌤️ A temperatura em ${cidade} é de ${temperatura}°C.`,\n    ok: true,\n  },\n};"
+      },
+      "id": "34c37e60-e808-4d35-951d-238cea43b7c8",
+      "name": "Formatar Mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "d8ce14ce-b823-4efd-a9f8-53989d660e98",
+      "name": "Enviar Temperatura",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "❌ Cidade não encontrada. Use o formato Cidade,UF,BR (ex.: São Paulo,SP,BR).",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "05023da5-f76d-4430-98eb-4c5d115962ac",
+      "name": "Enviar Erro",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 🌤️ Bot do Clima\n1. Recebe a mensagem no Telegram\n2. Guarda o texto em `queue` e normaliza (acentos, minúsculas, espaços, `,br`)\n3. Consulta a OpenWeather (`appid` = `$env.OPENWEATHER_API_KEY`)\n4. IF: status 200 + `main.temp` presente\n5. Responde com a temperatura ou com a mensagem de erro",
+        "height": 220,
+        "width": 420
+      },
+      "id": "ca7d1042-d166-4f02-9939-58830cb8f9bb",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Capturar Mensagem (queue)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capturar Mensagem (queue)": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Cidade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Cidade": {
+      "main": [
+        [
+          {
+            "node": "OpenWeather - Clima Atual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenWeather - Clima Atual": {
+      "main": [
+        [
+          {
+            "node": "Resposta Válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resposta Válida?": {
+      "main": [
+        [
+          {
+            "node": "Formatar Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enviar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Enviar Temperatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
